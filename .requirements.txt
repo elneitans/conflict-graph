@@ -1,6 +1,7 @@
 transformers>=4.49.0
 accelerate>=1.2.0
 huggingface-hub>=0.28.0
+openai>=2.0.0
 safetensors>=0.4.5
 sentencepiece>=0.2.0
 tqdm>=4.66.0

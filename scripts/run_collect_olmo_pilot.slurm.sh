@@ -25,8 +25,18 @@ fi
 export PYTHONUNBUFFERED=1
 export TOKENIZERS_PARALLELISM=false
 export PYTHONNOUSERSITE=1
-export HF_HOME="${HF_HOME:-$PWD/.hf_cache}"
-export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-$HF_HOME/transformers}"
+
+export HF_HOME="${HF_HOME:-/mnt/dccnas/archive/gilureta/natan.brugueras/hf_cache}"
+export HF_HUB_CACHE="${HF_HUB_CACHE:-$HF_HOME/hub}"
+export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$HF_HOME/datasets}"
+unset TRANSFORMERS_CACHE
+mkdir -p "$HF_HOME" "$HF_HUB_CACHE" "$HF_DATASETS_CACHE"
+echo "HF_HOME=$HF_HOME"
+echo "HF_HUB_CACHE=$HF_HUB_CACHE"
+echo "HF_DATASETS_CACHE=$HF_DATASETS_CACHE"
+df -h "$PWD" "$HF_HOME" || true
+du -sh "$HF_HOME" 2>/dev/null || true
+
 export PYTORCH_HIP_ALLOC_CONF="${PYTORCH_HIP_ALLOC_CONF:-garbage_collection_threshold:0.8,max_split_size_mb:512}"
 export HF_HUB_ETAG_TIMEOUT="${HF_HUB_ETAG_TIMEOUT:-120}"
 export HF_HUB_DOWNLOAD_TIMEOUT="${HF_HUB_DOWNLOAD_TIMEOUT:-120}"
@@ -105,7 +115,7 @@ python scripts/collect_olmo_responses.py \
   --run-name olmo3_1125_32b_pilot_8bit \
   --model-id allenai/Olmo-3-1125-32B \
   --dtype float16 \
-  --quantization 8bit \
+  --quantization none \
   --device-map auto \
   --max-memory-per-gpu 46GiB \
   --attn-implementation eager \

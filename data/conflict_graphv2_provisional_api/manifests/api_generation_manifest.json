@@ -1,0 +1,43 @@
+{
+  "dataset_name": "conflict_graphv2_provisional_api",
+  "status": "bootstrapped",
+  "created_at_utc": "2026-04-08T13:49:23+00:00",
+  "template_root": "/Users/natanzamorano/Documents/Projects/spar_AI/conflict_graph/data/conflict_graphv2_provisional",
+  "api_root": "/Users/natanzamorano/Documents/Projects/spar_AI/conflict_graph/data/conflict_graphv2_provisional_api",
+  "copied_structural_files": [
+    {
+      "relative_path": "clause_registry.csv",
+      "source": "/Users/natanzamorano/Documents/Projects/spar_AI/conflict_graph/data/conflict_graphv2_provisional/clause_registry.csv",
+      "target": "/Users/natanzamorano/Documents/Projects/spar_AI/conflict_graph/data/conflict_graphv2_provisional_api/clause_registry.csv"
+    },
+    {
+      "relative_path": "pair_registry.csv",
+      "source": "/Users/natanzamorano/Documents/Projects/spar_AI/conflict_graph/data/conflict_graphv2_provisional/pair_registry.csv",
+      "target": "/Users/natanzamorano/Documents/Projects/spar_AI/conflict_graph/data/conflict_graphv2_provisional_api/pair_registry.csv"
+    },
+    {
+      "relative_path": "directional_rubric_registry.csv",
+      "source": "/Users/natanzamorano/Documents/Projects/spar_AI/conflict_graph/data/conflict_graphv2_provisional/directional_rubric_registry.csv",
+      "target": "/Users/natanzamorano/Documents/Projects/spar_AI/conflict_graph/data/conflict_graphv2_provisional_api/directional_rubric_registry.csv"
+    },
+    {
+      "relative_path": "family_sheets.jsonl",
+      "source": "/Users/natanzamorano/Documents/Projects/spar_AI/conflict_graph/data/conflict_graphv2_provisional/family_sheets.jsonl",
+      "target": "/Users/natanzamorano/Documents/Projects/spar_AI/conflict_graph/data/conflict_graphv2_provisional_api/family_sheets.jsonl"
+    },
+    {
+      "relative_path": "manifests/pilot_manifest.json",
+      "source": "/Users/natanzamorano/Documents/Projects/spar_AI/conflict_graph/data/conflict_graphv2_provisional/manifests/pilot_manifest.json",
+      "target": "/Users/natanzamorano/Documents/Projects/spar_AI/conflict_graph/data/conflict_graphv2_provisional_api/manifests/pilot_manifest.json"
+    }
+  ],
+  "template_source_hashes": {
+    "clause_registry.csv": "d31508a14c68cb810e01df1927b7b573328bfd4e711e797ad60786ab6d9a550d",
+    "pair_registry.csv": "ba1f4ba1662c3b6534d89e5f0a2425755bac712440cc3009198f3bf1f30fbb32",
+    "directional_rubric_registry.csv": "7a102322d1b5b4c1663435502f143f0fe949159a99ffe0e1d6751c1cf925724c",
+    "family_sheets.jsonl": "df1635177fbed09ca5713fecf88ee27b3eb43b4bf5af9e8e0ba0946509bc74c2",
+    "manifests/pilot_manifest.json": "d44c8e8851569d72a7bfe2d36a11e519b0630e0d6d6c77b6b00a24ee70f1459d"
+  },
+  "generated_family_count": 0,
+  "assembled_prompt_count": 0
+}
