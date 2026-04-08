@@ -1,0 +1,8 @@
+transformers>=4.49.0
+accelerate>=1.2.0
+huggingface-hub>=0.28.0
+safetensors>=0.4.5
+sentencepiece>=0.2.0
+tqdm>=4.66.0
+# OLMo-3-1125-32B 8-bit loading path. ROCm support is still environment-sensitive.
+bitsandbytes>=0.48.0

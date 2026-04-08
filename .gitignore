@@ -1,0 +1,5 @@
+.env
+__pycache__/
+.hf_cache/
+.venv-olmo-collect/
+logs/

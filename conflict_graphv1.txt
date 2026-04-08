@@ -1,0 +1,179 @@
+\subsection{Conflict Graphs of Principle Systems (v1)}
+
+\subsubsection{Introduction:}
+
+We introduce Conflict Graphs: a signed weighted graph where a fixed principle system (nodes) are stress-tested on a controlled pairwise conflict scenarios, resulting in conflict edges. We construct such graph building on top of previous work \cite{zhang2025stress}, and asks whether that graph predicts deployment-relevant instability under paraphrase.
+
+We adopt \cite{zhang2025stress} basic approach: treating a constitution/model spec as an object that can be stress-tested through value-tradeoff scenarios, then high cross-model disagreement in pairwise tradeoff scenarios is a useful diagnostic for specification problems, including direct contradictions, insufficient granularity, and interpretive ambiguity. This resembles \cite{he2025statutory} stance, where they state that "the entropy over reasonable interpreters can be viewed as an approximation for the aleatoric uncertainty, or ambiguity, of the ruleset as applied to a particular scenario". Building on that foundation, we move a little beyond and ask for the measurable conflict structure a spec has, and whether that structure help explain when a model becomes unstable under deployment.
+
+\subsubsection{Hypothesis}
+
+For a fixed principle system and a controlled corpus of pairwise conflict scenarios, the signed weighted conflict graph induced from model behavior is reproducible across paraphrase-resampled datasets. Moreover, simple graph properties (such as node signed centrality or local conflict density), predict deployment-stability metrics such as paraphrase sensitivity, disagreement between models.
+
+This hypothesis is falsifiable: first, the graph may fail to be reproducible across resampled paraphrase sets, in which case the underlying interaction statistics are not estimable with sufficient reliability (i.e., we can’t infer stable relations between principles, excessively dependant on wording). Second, graph-derived predictors may fail to explain held-out instability better than trivial or main-effect baselines, in which case the graph framing adds little.
+
+Operational hypothesis: in a controlled corpus built from one principle system, principle pairs with higher empirical conflict weight will exhibit higher response instability under paraphrase and light contextual variation than principle pairs with lower empirical conflict weight.
+
+\subsubsection{Construction}
+
+The benchmark uses one fixed principle system (v1: the 26 values from the second-level cluster from \cite{huang2025valueswild}). For each unordered pair of principles, the dataset contains controlled conflict templates authored so that exactly two target principles are jointly active by construction (v1: \cite{zhang2025stress}, \texttt{stress-testing-model-spec} dataset). Each item includes one primary scenario and 3--5 paraphrastic variants.
+
+A semantic-preserving paraphrase of the scenario keeps fixed:
+\begin{enumerate}
+    \item underlying requested action;
+    \item same decisive normative content (important attributes such as age, context, etc);
+    \item conflict pair;
+    \item same harm/helpfulness stakes (intensity of the conflict).
+\end{enumerate}
+
+A potential prompt for LLM-generated paraphrases is shown in Appendix. A potential paraphrase validation stack is:
+\begin{enumerate}
+    \item Slot consistency checks: enforced exact preservation of entities, explicit constraints, context, actions and role preservation with deterministic checks. (Context is extremely relevant in principle-conflict). Hard filter.
+    \item Lexical distance floor: reasonable n-gram overlap (anti-duplication).
+    \item Embedding similarity interval: $x_1 \leq \text{cosine similarity} \leq x_2$. The number must be tuned with examples, but the idea is that the paraphrases are not so different, but neither a duplicate.
+    \item small human audit set.
+    \item For each scenario $s\in S$, run objective model $m\in M$ on the $K_s$ paraphrases and calculate intra-model disagreement on the judged response values. If it's high, then either: the paraphrase set is not meaning-preserving or the model is keying on superficial linguistic features rather than the underlying conflict structure. Should check manually, not a filter per se.
+    \item Additionally, We could use a LLM-as-a-judge to measure on a Likert scale how similar the paragraph is semantically and how different it’s syntactically, and keep those with high and low values respectively. Optional.
+\end{enumerate}
+
+One idea to weight the outputs from the different layers of the validation stack that are not hard filters is establishing a voting system then has one vote, and then majority wins. In addition to pairwise-conflict items, the benchmark also includes matched single-principle control scenarios for each principle. These are necessary because pairwise conflict must be defined as excess instability attributable to joint activation, not raw instability that might already arise for one principle alone. Each response is labeled by a committee of R LM-judges (R=3 in v1). Each judge receives the principle-pair definition, the scenario, the model response, and a pair-specific scoring rubric. Judges assigns two principle-specific scores, one for principle i and one for principle j, each in \{0,...,6\}.
+
+%\subsubsection{Cue Laundering}
+%
+%The idea is to preserve the conflict-relevant latent structure of a scenario while attenuating overt lexical markers that directly name, stereotype or safety policy language. 
+%
+%For catching and replacing trigger cues, we should perform a n-gram ($n=1,2,3$) analysis of trigger expressions found in the dataset of conflict used.
+%
+%Given the context-sensitive nature of principle conflicts, the validation step is important: we propose a two step evaluation:
+%\begin{enumerate}
+%    \item Ensure the existence of the original conflict of principles with an acceptable intensity level: We should use a LLM to judge if there still exists the original conflict between the two principles, and if so, to measure on a Likert scale how strong is such conflict (few-shot in-context learning setup), keeping only sufficiently high values. (\textit{circular}: we remove cues that help a model detect the conflict, then use a model to check if the same conflict remains. We should define a structured signature of the scenario that should remain constant after laundering, but that might be too much for this v1).
+%    \item Reduction of highly diagnostic n-grams and policy words.
+%\end{enumerate}
+
+%Then, we could compute the instability between two principles using the original and laundered paraphrases, and compute the quotient between the laundered over the original one to understand if the instability is produced by policy-trigger cues or if it actually represents an unstable conflict.
+
+\subsubsection{Operational Definitions}
+
+\textbf{Pairwise Instability:} For each principle pair $(i, j)$, estimate instability on the conflict scenarios where both $i$ and $j$ are jointly active by design.
+
+%Instability as entropy: discarded. 
+%Let $C$ be the ruleset, $M$ the set of all models, $S_{ij}$ the set of all scenarios involving principles $i,j\in C$, and for each scenario $s\in S_{ij}$, we define the set of all paraphrases $K_s$. 
+%For a base scenario $s$ and its paraphrase variants, suppose each model response be mapped into the response-category ontology $Y$ as discussed. Let $r_{m,s,k}\in Y$ denote the response category assigned to model $m$'s response for paraphrase $k\in K_s$. We then define the marginal probability that model $m$ selects category $y\in Y$ across the paraphrases of scenario $s$ as:
+%\begin{equation}
+    %P_{m}^s(y) = \frac{1}{|K_s|}\sum_{k\in K_s}\mathbf 1[r_{m,s,k} = y]
+%\end{equation}
+%Then, following \cite{he2025statutory}, we define the inter-model disagreement for that scenario:
+%\begin{equation}
+ % \hat{P}_{ij}^s(y) = \frac{1}{|M|}\sum_{m\in M}P_{m}^s(y)
+%\end{equation}
+%Then, we compute the inter-model disagreement for that scenario as the normalized entropy:
+%\begin{equation}
+%    D_{ij}(s) = \frac{H(\hat{P}_{ij}^s)}{\log|Y|}
+%\end{equation}
+
+%Then, we aggregate across scenarios to have the instability between two principles $i,j$:
+%\begin{equation}
+%    I_{ij} = \frac{1}{|S_{ij}|}\sum_{s\in S_{ij}}D_{ij}(s)
+%\end{equation}
+
+Let $C$ be the ruleset, $M$ the set of all models, $S_{ij}$ the set of all scenarios involving principles $i,j\in C$, and for each scenario $s\in S_{ij}$, we define the set of all paraphrases $K_s$. For a base scenario $s$ and its paraphrase variants, each model response is first mapped by a committee of $R$ LM-judges into two principle-specific scores, one for principle $i$ and one for principle $j$, each in \{0,...,6\}. Let $z^{l,i}_{m,s,k} \in \{0,...,6\}$ and $z^{l,j}_{m,s,k} \in \{0,...,6\}$ denote the scores assigned by judge $l\in\{1,...,R\}$ to the response of model $m$ on paraphrase $k\in K_s$, for principles $i$ and $j$ respectively. We aggregate the judges scores for each principle by the median: $a_{m,s,k} = \frac{1}{6}\text{median}_{l}(z^{l,i}_{m,s,k})$ and $b_{m,s,k} = \frac{1}{6}\text{median}_{l}(z^{l,j}_{m,s,k})$.
+
+From this two-dimensional representation we define two quantities. The first is directional orientation, $o_{m,s,k} = b_{m,s,k}-a_{m,s,k}\in[-1,1]$ where negative values indicate favoring principle $i$, positive values indicate favoring principle $j$, and values near zero indicate either balanced accommodation or weak directional commitment. The second is total commitment: $c_{m,s,k} = a_{m,s,k}+b_{m,s,k}\in[0,2]$ which  measures how strongly the response engages the two principles overall. For two committed responses represented by $v=(a,b)$ and $v'=(a',b')$, we define their distance as: $d(v,v') = |a-a'|+|b-b'|$. We first measure within model paraphrase instability (what is used in the paraphrase generation step) for a fixed scenario $s$ and model $m$. Define:
+\begin{equation}
+    D_{intra}(s,m) = \frac{1}{|K_s|(|K_s|-1)}\sum_{k,k'\in K_s, k\neq k'}d(v_{m,s,k},v'_{m,s,k})
+\end{equation}
+
+This quantity measures how much model's resolution of the same underlying conflict shifts under meaning-preserving rewordings. High values indicate either excessive wording sensitivity or poor paraphrase quality; such cases are treated as a validation diagnostic rather than as direct evidence of pairwise conflict. After filtering or flagging scenarios with excessive within-model paraphrase instability, we define a scenario-level representation for each model by averaging across its committed paraphrases: $\bar{v}_{m,s} = \frac{1}{|K_s|}\sum_{k\in K_s}v_{m,k,s}$. We then define the inter-model disagreement for scenario s as the mean pairwise distance across the model-level averages:
+\begin{equation}
+    D_{inter}(s) = \frac{1}{|M|(|M|-1)}\sum_{m,m'\in M, m\neq m'}d(\bar{v}_{m,s},\bar{v}_{m',s})
+\end{equation}
+
+This is the primary scenario-level instability quantity. It measures how far apart the models are, on average, in the joint principle-support space after marginalizing over paraphrases. Pair-level distance-aware instability is obtained by averaging this scenario-level disagreement across all scenarios involving principles (i,j), interpreted as the average magnitude of cross-model disagreement in how the target pairwise conflict is resolved:
+\begin{equation}
+    I_{dist}(i,j) = \frac{1}{|S_{ij}|}\sum_{s\in S_{ij}}D_{inter}(s)
+\end{equation}
+
+\textbf{Single-principle instability:} For each principle $i$, estimate instability on the matched single-principle control scenarios where only $i$ is active. $I_i$ is defined analogously from the matched single-principle control scenario sets.
+
+\paragraph{Edge weight}
+
+Edge should reflect three things: interaction-specific excess instability, directionality of which principle tends to dominate and robustness across paraphrases. We propose a rich edge representation as a tuple:
+
+\begin{itemize}
+    \item \textbf{First: Excess instability}
+
+    Formula:
+    \[
+    EI_{\text{original}}(i,j) = I_{dist}(i,j) - \frac{I_{dist}(i)}{2} - \frac{I_{dist}(j)}{2}
+    \] 
+
+    \item \textbf{Second: Dominance Asymmetry}
+
+    We define the average orientation across paraphrases $\bar{o}_{m,s} = \frac{1}{|K_s|}\sum_{k\in K_s}{o_{m,s,k}}$. Then, for each $s$, we average the model-level orientation across models: $A_{ij}(s) = \frac{1}{|M|}\sum_{m\in M}\bar{o}_{m,s}$.
+    
+    The pair-level dominance asymmetry is then:
+\[
+    DA(i,j) = \frac{1}{|S_{ij}|}\sum_{s\in S_{ij}}A_{ij}(s)
+    \]
+
+    Positive values of DA(i,j) indicate a systematic tendency to favor principle j, negative values indicate a tendency to favor principle i, and values near zero indicate no stable directional precedence. Importantly, values near zero may arise either from genuine compromise or from a balanced split between opposite resolutions, so dominance asymmetry must be interpreted jointly with instability. 
+
+    \item \textbf{Third: Cue Robustness}
+
+    Excess instability of pair laundered / of pair original. Low value means instability may be cue-driven.
+    \[
+    CR(i,j) = EI_{\text{laundered}}(i,j) - EI_{\text{original}}(i,j)
+    \]
+\end{itemize}
+
+Then, the edge weight is defined as a vector:
+\[
+w_{ij} = (EI_{\text{original}}(i,j), DA(i,j), CR(i,j))
+\]
+
+Considering functional graph (reproducible across resampled paraphrase sets), If an edge $(i,j)$ has high excess instability (EI), high reliability (stable under different ) and high cue robustness, then the edge is a hotspot, and candidate for refinement. If high Instability but low cue robustness, then is likely a wording issue with the scenario. If high Dominance Asymmetry, then the model has an implicit precedence rule (what Zhang et al.’s studied). If high Instability and null dominance asymmetry, then candidate ambiguous conflict to check. 
+
+\subsubsection{Empirical Protocol}
+
+\begin{enumerate}
+    \item split the paraphrase variants into two disjoint halves, and save a test partition of scenarios+paraphases.
+    \item estimate the graph independently on each half.
+    \item quantify reproducibility by correlating edge weights, node rankings, or other graph-level summaries across the two split-half graphs.
+    \item test whether high-conflict pairs or graph-derived principle features predict held-out instability on unseen paraphrases and light contextual variants.
+    \item Then compare two variants: Model A (instability predicted only from individual principle effects) and Model B (predicts instability using pairwise conflict weights and graph-derived features such as signed centrality or local conflict density).
+\end{enumerate}
+
+\subsubsection{Useful Results from Graph}
+
+Information derived from the graph:
+\begin{enumerate}
+    \item edge weight of some principle pair: is there conflict?
+    \item analyze neighborhood/clusters of high conflict zone,
+    \item Conflict centrality of node gives you information about problematic principles.
+    \item Pair-level instability on held-out scenarios: given a new scenario that activates $i$ and $j$, can we predict whether the model will be unstable (under contextual variation, paraphrase)?
+    \item Principle-level fragility: given principle $i$, can we predict whether scenarios involving $i$ tend to be unstable?
+\end{enumerate}
+
+\subsubsection{Expected Result}
+
+In a controlled principle benchmark, signed pairwise conflict weights estimated from one set of paraphrases show strong reproducibility under resampling, and pairwise conflict structure predicts held-out response instability under paraphrase and light contextual variation better than individual principle effects alone.
+
+\textbf{Graph-derived interaction features predict held-out behavioral instability across new scenarios built from the same principle system.}
+
+if we want to optimize spec’s, we should have to take into account interaction between principles, understand topology of Spec. If Model B predicts held-out instability better than Model A, then the graph is adding value: \textbf{relational structure of the principle set} matters. it summarizes interaction patterns globally.
+
+\subsubsection{Contributions}
+
+\begin{enumerate}
+    \item a reproducible behavioral method for estimating pairwise conflict structure in a fixed principle system.
+    \item a signed weighted conflict graph as a compact empirical representation of that structure
+    \item evidence that interaction structure carries predictive information about deployment-relevant instability beyond individual principle main effects.
+\end{enumerate}
+
+\subsubsection{Future Extensions}
+
+\begin{enumerate}
+    \item GEPA-style reflection for (adversarial) paraphrase generation
+    \item Fine-grained ontology.
+    \item Use it for Conflict-Aware Spec Refinement. (right now, instability shouldn’t mean inmediately change the principle.)
+\end{enumerate}

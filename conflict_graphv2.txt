@@ -1,0 +1,373 @@
+\subsection{Conflict Graphs of Clause Systems (v2)}
+
+\subsubsection{Introduction:}
+
+We introduce Conflict Graphs v2: a weighted graph over atomic clauses in a fixed written specification, estimated from the behavior of a fixed base model under a fixed conditioning method on a controlled clause-pair benchmark. The purpose of the graph is narrow and empirical: to identify which clause pairs produce unstable action choices under equivalence-preserving perturbations, and to use those hotspots to guide conservative specification refinement. In addition to this primary graph, v2 includes one secondary diagnostic layer for clause directionality, designed to detect cases where the final action is stable but the model's apparent balancing between the two targeted clauses is not.
+
+The core object in v2 is intentionally modest. It is \textbf{not} a graph of the intrinsic topology of the specification, \textbf{not} a graph of latent normative conflict, and \textbf{not} a pooled summary of disagreement across heterogeneous model families. It is a behavioral summary of one conditioned model instance. Formally, let $B$ denote a fixed base open model, let $A$ denote a fixed conditioning operator, and let $C$ denote a written specification. Then $M(C)=A(B,C)$ is the conditioned model instance under study, and the conflict graph is estimated from the responses of $M(C)$ alone.
+
+This design is motivated by three constraints. First, scientific cleanliness: we want an estimand that is observable and interpretable without requiring access to a "true decisive basis" for each decision. Second, minimality: we want the smallest measurement stack that can still support a meaningful result. Third, feasibility: we want a benchmark and intervention loop that a small team can execute with one open model, a short clause-level specification, a modest authoring budget, and limited human audit.
+
+The main intuition from v1 is preserved: failures of aligned behavior often arise from interactions between rules rather than from isolated clause compliance. We keep the stress-testing idea, but we relocate it into a cleaner experimental frame. The graph is now a map of \textbf{pairwise action instability} for atomic clauses, measured on controlled scenario families that target one clause pair at a time while allowing background clauses to remain active.
+
+At the same time, observing only the final selected action can hide a second pathology. A model may stably return the same action tag across equivalent variants while appearing to balance the two targeted clauses differently from one variant to the next. This is a modest version of the broader lesson from work on alignment discretion: discretion can remain hidden if we observe only the selected action and not how competing clauses appear to be balanced in the response. For that reason, v2 distinguishes \textbf{action instability} from \textbf{directionality instability}. The first remains the primary graph object. The second is a clearly secondary, noisy, and auditable diagnostic.
+
+\textbf{What the graph is a graph of.} In v2, each node is an atomic written clause. Each edge weight is the average probability that equivalent variants of a scenario family targeting that clause pair induce different action labels from the same conditioned model. This is the primary object throughout the paper. Separately, each pair-targeted family may also receive an auxiliary directional score describing how the response appears to balance the two targeted clauses. That directional layer is not treated as graph ground truth and does not change the primary edge definition.
+
+\subsubsection{Hypothesis}
+
+We study three hypotheses.
+
+\textbf{H1: Reproducibility.} For a fixed specification $C$, base model $B$, and conditioning operator $A$, pairwise edge weights estimated from one subset of authored scenario families are positively correlated with edge weights estimated from a disjoint subset of scenario families targeting the same clause pairs. If this fails, then the graph is too sensitive to authoring idiosyncrasies to support further interpretation.
+
+\textbf{H2: Pair-specific predictive value.} Clause-pair edge weights estimated on a discovery split predict held-out family instability for the same clause pairs better than a non-relational baseline that uses only clause main effects and simple scenario metadata. If this fails, then interaction-specific measurement is not adding value beyond individual clause difficulty.
+
+\textbf{H3: Refinement utility.} If we conservatively rewrite the small number of clauses implicated by the most reliable hotspot pairs, and re-apply the same conditioning operator to the same base model, then held-out instability on those targeted pairs decreases without a corresponding increase in inadmissible actions or broad off-target drift. If this fails, then the graph may still be descriptive, but not yet useful for clean intervention.
+
+These hypotheses are deliberately narrower than those in v1. We do not claim that the graph recovers the true conflict structure of the specification in a model-independent sense. We claim only that it can be reproducibly estimated for a fixed conditioned model, and that it may support conservative refinement.
+
+\textbf{Operational hypothesis.} In a controlled clause-pair benchmark, some clause pairs will exhibit systematically higher action-instability under equivalence-preserving perturbations than would be expected from single-clause behavior and simple family metadata alone.
+
+\textbf{Auxiliary diagnostic expectation.} Among pair-targeted families with low action-instability, some will still exhibit measurable directionality instability, indicating that the model's apparent balancing between the target clauses is not fully stable even when the final action tag is.
+
+\subsubsection{Construction}
+
+\textbf{Specification and model setup.} Let $C=\{c_1,\dots,c_n\}$ be a short written specification decomposed into $n$ atomic clauses. In v2, we set $n=8$ for the first study. Clause decomposition is frozen before benchmark construction. A clause is admissible as a node only if it satisfies all three conditions:
+\begin{enumerate}
+    \item it is a citable directive that can guide an action choice on its own;
+    \item it can be rewritten locally without rewriting the rest of the specification;
+    \item it does not bundle multiple unrelated directives or hidden exceptions.
+\end{enumerate}
+High-level values, stylistic aspirations, and broad themes are not used as nodes unless they are rewritten into atomic directives first.
+
+We fix one open base model $B$ and one conditioning operator $A$. For v2, the conditioning operator is \textbf{system-prompt conditioning only}. We do not vary post-training method in the main study. This keeps the intervention clean: the only manipulated object is the written specification. We evaluate all model runs with deterministic decoding (temperature $0$ and fixed decoding settings).
+
+\textbf{Graph.} The graph is $G(C)=(V,E,w)$ where:
+\begin{enumerate}
+    \item $V=\{c_1,\dots,c_n\}$ is the set of atomic clauses;
+    \item $E=\{(c_i,c_j): 1\leq i<j\leq n\}$ is the set of unordered clause pairs;
+    \item $w_{ij}$ is the primary edge weight defined below as mean pairwise action-instability for clause pair $(i,j)$.
+\end{enumerate}
+
+\textbf{Benchmark families.} The benchmark is built from \textbf{scenario families}, not isolated prompts. Each family is designed around one target object and carries a single family-level label set.
+
+There are two family types:
+\begin{enumerate}
+    \item \textbf{Pair-targeted families} $F_{ij}$ for unordered clause pairs $(i,j)$.
+    \item \textbf{Single-clause control families} $G_i$ for individual clauses $i$.
+\end{enumerate}
+
+For v2 we use:
+\begin{enumerate}
+    \item $6$ pair-targeted families per unordered clause pair;
+    \item $2$ single-clause control families per clause;
+    \item $5$ variants per family: $1$ canonical prompt, $3$ paraphrases, and $1$ innocuous counterfactual.
+\end{enumerate}
+
+For each pair-targeted set, $4$ families are assigned to discovery and $2$ to the frozen test split. For each single-clause control set, $1$ family is assigned to discovery and $1$ to test.
+
+With $n=8$, this yields $28$ pair-targeted sets and $8$ single-clause control sets, for a total of $168+16=184$ families and $920$ prompts per conditioned model. This scale is still intentionally modest: it supports full pair coverage, split-half reproducibility on the discovery graph, and a real frozen-test intervention check without requiring a large annotation operation.
+
+\textbf{Targeting rule.} A pair-targeted family for $(i,j)$ is authored so that clauses $i$ and $j$ are the intended primary sources of tension. We do \textbf{not} require that exactly two clauses are active in a metaphysically pure sense. Instead, for each family we explicitly annotate:
+\begin{enumerate}
+    \item target clause pair $(i,j)$;
+    \item domain;
+    \item stakes level;
+    \item role asymmetry;
+    \item whether additional clauses appear materially implicated.
+\end{enumerate}
+This is cleaner than pretending that all non-target clauses can be fully silenced.
+
+\textbf{Equivalence-preserving perturbations.} All variants within a family are intended to preserve the same family-level normative status. In particular, they must preserve:
+\begin{enumerate}
+    \item the user's underlying request;
+    \item the target clause pair;
+    \item all decision-relevant facts;
+    \item the family's admissible action set;
+    \item the family's determinate vs underdeterminate status.
+\end{enumerate}
+
+We use two perturbation types only:
+\begin{enumerate}
+    \item \textbf{Paraphrases:} surface rewordings that preserve all decision-relevant content.
+    \item \textbf{Innocuous counterfactuals:} morally irrelevant substitutions, such as names or non-salient setting details, that preserve the admissible action set.
+\end{enumerate}
+
+We explicitly exclude boundary-case counterfactuals, adversarial lexical laundering, and perturbations that may legitimately change the admissible action set. Those are future extensions, not part of the core instability metric.
+
+\textbf{Family authoring sheet.} Every family is created with a structured sheet containing:
+\begin{enumerate}
+    \item canonical prompt;
+    \item target clause pair or target single clause;
+    \item protected facts that all variants must preserve;
+    \item determinate vs underdeterminate status;
+    \item admissible action set;
+    \item nuisance metadata;
+    \item one-line note explaining why the family targets this clause pair.
+\end{enumerate}
+For pair-targeted families only, the sheet also contains a short \textbf{directional rubric} with bounded anchors for what stronger support for clause $i$ or clause $j$ would look like in that family. This rubric is used only by the auxiliary directional scorer.
+
+\textbf{Family-level labels.} We do not attempt to recover a hidden true normative basis. Instead, each family receives only weak labels that are observable and auditable:
+\begin{enumerate}
+    \item \textbf{Determinate flag} $d_f\in\{0,1\}$.
+    \item \textbf{Admissible action set} $A_f^\star \subseteq \mathcal{Y}$, where $\mathcal{Y}$ is the action ontology defined below.
+\end{enumerate}
+For determinate families, $A_f^\star$ is usually a singleton. For underdeterminate families, it may contain multiple admissible actions. This label design is intentionally aligned with rating-indeterminacy concerns: we use admissible sets, not forced single labels when the case does not warrant them.
+
+\textbf{Response collection.} For each prompt variant, the conditioned model returns a normal natural-language answer and then emits one final structured action tag from a fixed ontology. The graph is computed from this action tag only. This avoids making LLM-judge scoring the primary measurement layer. On a human-audited subset, annotators check that the final action tag matches the actual response content; if not, the response is recoded during audit. If action-tag/content inconsistency is non-trivial on audit, the paper reports both raw-tag and audited-tag sensitivity results.
+
+For pair-targeted families only, we also apply a lightweight auxiliary directional scorer. The scorer receives the two target clauses, the family sheet, the pair-specific directional rubric, and the model response, and assigns one bounded ordinal support score to clause $i$ and one to clause $j$. In v2, this layer uses one fixed rubric-following scorer model rather than a judge committee. We prefer this rubric-based two-axis scoring layer over structured self-reported clause citation as the default directional proxy. The reason is scientific cleanliness: self-reported citations depend on the model truthfully introspecting on its own basis, whereas rubric scoring operates on observable response content. The directional scorer is still noisy and does not recover the true decisive basis. It is used only as a secondary diagnostic and is audited on a subset; if scorer-audit agreement is poor, directional results are reported as exploratory only.
+
+\textbf{Validation stack.} We use a minimal validation stack for family quality:
+\begin{enumerate}
+    \item deterministic slot and fact preservation checks for all generated variants;
+    \item author review of every canonical prompt;
+    \item human review of at least one non-canonical variant per family;
+    \item adjudication of the family-level admissible action set before any model evaluation;
+    \item post-hoc audit of action-tag/content consistency on a fixed random subset of model outputs;
+    \item post-hoc audit of directional scores on a fixed random subset of pair-targeted outputs.
+\end{enumerate}
+
+\subsubsection{Operational Definitions}
+
+\textbf{Action ontology.} Let the action space be
+\[
+\mathcal{Y}=\{\texttt{ALLOW},\texttt{REFUSE},\texttt{CLARIFY},\texttt{CONSTRAINED\_HELP}\}.
+\]
+The ontology is intentionally small.
+\begin{enumerate}
+    \item \texttt{ALLOW}: the model directly complies with the request.
+    \item \texttt{REFUSE}: the model declines substantive assistance.
+    \item \texttt{CLARIFY}: the model requests missing information or postpones action pending clarification.
+    \item \texttt{CONSTRAINED\_HELP}: the model provides partial or transformed assistance while withholding disallowed content.
+\end{enumerate}
+We evaluate only this action tag in the main graph. Richer rationale-based labels are out of scope for the primary estimand.
+
+\textbf{Two pathologies.} We distinguish two forms of instability. \textbf{Action instability} asks whether equivalent variants receive different action tags. \textbf{Directionality instability} asks whether, conditional on the action being held fixed and the response being interpretable, the model appears to balance the two target clauses differently across equivalent variants. The first is the primary graph signal. The second is an auxiliary diagnostic designed to catch hidden arbitrariness that need not propagate into different action tags.
+
+\textbf{Pairwise instability.} Let $f\in F_{ij}$ be a family targeting clause pair $(i,j)$, let $V_f$ denote its set of equivalent variants, and let $y_{f,v}\in\mathcal{Y}$ denote the action tag returned by the model on variant $v\in V_f$. We define family-level action-instability as the pairwise flip rate:
+\begin{equation}
+    I_{\text{act}}(f)=\frac{1}{|V_f|(|V_f|-1)}\sum_{v\neq v'\in V_f}\mathbf{1}[y_{f,v}\neq y_{f,v'}].
+\end{equation}
+
+This is the probability that two equivalent variants sampled from the same family produce different action tags. It is the primary family-level outcome in v2.
+
+The pair-level instability for clause pair $(i,j)$ is the mean family instability:
+\begin{equation}
+    I_{\text{pair}}(i,j)=\frac{1}{|F_{ij}|}\sum_{f\in F_{ij}} I_{\text{act}}(f).
+\end{equation}
+
+\textbf{Auxiliary directional scoring layer.} For each response on a pair-targeted family $f\in F_{ij}$, the auxiliary scorer assigns two ordinal support scores
+\[
+z^i_{f,v}, z^j_{f,v}\in\{0,1,2,3,4\},
+\]
+where larger values indicate that the observable content of the response appears to support clause $i$ or clause $j$ more strongly under the family rubric. We normalize these to
+\[
+a_{f,v}=\frac{z^i_{f,v}}{4}, \qquad b_{f,v}=\frac{z^j_{f,v}}{4},
+\]
+and define the response-level orientation and commitment as
+\[
+o_{f,v}=b_{f,v}-a_{f,v}\in[-1,1], \qquad c_{f,v}=a_{f,v}+b_{f,v}\in[0,2].
+\]
+Positive $o_{f,v}$ means the response appears more supportive of clause $j$, negative values mean it appears more supportive of clause $i$, and values near zero indicate either balanced accommodation or weak directional commitment.
+
+Because not every response is equally informative for directional interpretation, we score directionality only on \textbf{eligible responses}. Let $\tau_c=0.5$ and define the eligible set
+\[
+V_f^{\dagger}=\{v\in V_f : c_{f,v}\geq \tau_c\}.
+\]
+This excludes responses with too little observable engagement with either target clause to support a meaningful directional reading.
+
+Let $y_f^\star$ be the unique modal action tag in family $f$, if such a unique modal tag exists. Define
+\[
+V_f^\star=\{v\in V_f^{\dagger}: y_{f,v}=y_f^\star\}.
+\]
+The directional layer is therefore conditioned on a fixed action. If $|V_f^\star|<2$, the family is treated as not directionally scorable.
+
+For a directionally scorable family, define family-level \textbf{directionality instability} as
+\begin{equation}
+    I_{\text{dir}}(f)=\frac{1}{|V_f^\star|(|V_f^\star|-1)}\sum_{v\neq v' \in V_f^\star}|o_{f,v}-o_{f,v'}|.
+\end{equation}
+This quantity is high when the final action remains effectively fixed but the apparent balancing between the target clauses shifts across equivalent variants.
+
+For descriptive purposes, we also define the family-level \textbf{mean orientation}
+\begin{equation}
+    \bar{o}(f)=\frac{1}{|V_f^\star|}\sum_{v\in V_f^\star}o_{f,v}.
+\end{equation}
+This is not a claim about the true hidden basis of the response. It is a noisy summary of which clause the response appears to favor, conditional on the family rubric.
+
+At the pair level, let $F^{\dagger}_{ij}\subseteq F_{ij}$ denote the subset of directionally scorable families. We define
+\begin{equation}
+    I_{\text{dir-pair}}(i,j)=\frac{1}{|F^{\dagger}_{ij}|}\sum_{f\in F^{\dagger}_{ij}}I_{\text{dir}}(f),
+\end{equation}
+and
+\begin{equation}
+    O_{\text{pair}}(i,j)=\frac{1}{|F^{\dagger}_{ij}|}\sum_{f\in F^{\dagger}_{ij}}\bar{o}(f).
+\end{equation}
+These pair-level quantities are auxiliary overlays, not edge weights.
+
+\textbf{Single-clause control instability.} Let $G_i$ be the set of single-clause control families for clause $i$. Define
+\begin{equation}
+    I_{\text{single}}(i)=\frac{1}{|G_i|}\sum_{g\in G_i} I_{\text{act}}(g).
+\end{equation}
+These controls are not built into the primary edge definition. They serve two narrower purposes: (i) descriptive calibration of clause-specific instability, and (ii) support for a non-relational baseline.
+
+\textbf{Inadmissibility.} Each family $f$ has a non-empty admissible action set $A_f^\star\subseteq \mathcal{Y}$. We define family-level inadmissibility rate as:
+\begin{equation}
+    E_{\text{inad}}(f)=\frac{1}{|V_f|}\sum_{v\in V_f}\mathbf{1}[y_{f,v}\notin A_f^\star].
+\end{equation}
+This is a secondary outcome. It is not used to define edges, but it is essential in refinement evaluation: reduced instability is not a success if it is achieved by collapsing onto an inadmissible action.
+
+The pair-level inadmissibility rate is:
+\begin{equation}
+    E_{\text{pair}}(i,j)=\frac{1}{|F_{ij}|}\sum_{f\in F_{ij}} E_{\text{inad}}(f).
+\end{equation}
+
+\textbf{Determinate-family rate.} Because instability on underdeterminate families is not always a pathology of the same kind as instability on determinate families, we report metrics both overall and stratified by family status. Let $F^{\text{det}}_{ij}\subseteq F_{ij}$ denote the determinate families and $F^{\text{undet}}_{ij}\subseteq F_{ij}$ the underdeterminate families. We compute the same aggregates on each subset as a descriptive breakdown.
+
+\paragraph{Edge weight}
+
+The \textbf{primary edge weight} is
+\[
+w_{ij}=I_{\text{pair}}(i,j).
+\]
+An edge therefore represents average action-instability for a target clause pair on equivalence-preserving variants.
+
+The \textbf{primary graph} is single-channel. We do not mix instability, precedence, and cue-dependence into one edge object. That richer decomposition is deferred to later work.
+
+For each pair $(i,j)$, we may additionally report the auxiliary directional overlay
+\[
+d_{ij}=\left(I_{\text{dir-pair}}(i,j), O_{\text{pair}}(i,j)\right),
+\]
+but $d_{ij}$ is not part of the graph weight and is never interpreted as ground-truth clause precedence.
+
+For descriptive node-level analysis, we define the \textbf{instability burden} of clause $i$ as
+\begin{equation}
+    b_i=\frac{1}{n-1}\sum_{j\neq i} w_{ij}.
+\end{equation}
+This identifies clauses that frequently participate in unstable interactions.
+
+As a \textbf{sensitivity analysis only}, we also estimate a residualized family-instability model on the discovery split:
+\begin{equation}
+    \hat{I}_{\text{main}}(f)=\alpha+\beta_i+\beta_j+\gamma^\top m_f,
+\end{equation}
+where $(i,j)$ is the target pair of family $f$ and $m_f$ is a small metadata vector (domain, stakes, role asymmetry, and the flag for additional materially implicated clauses). The residualized pair score is then:
+\begin{equation}
+    w^{\Delta}_{ij}=\frac{1}{|F_{ij}|}\sum_{f\in F_{ij}} \left(I_{\text{act}}(f)-\hat{I}_{\text{main}}(f)\right).
+\end{equation}
+We report $w^{\Delta}_{ij}$ only as a robustness check. It is \textbf{not} the primary graph and should not be interpreted as a clean causal interaction effect.
+
+\subsubsection{Empirical Protocol}
+
+\begin{enumerate}
+    \item \textbf{Freeze the study objects before evaluation.} Freeze the atomic clause set, family sheets, admissible action sets, perturbation variants, and the family-level split into discovery and frozen test. Splitting is done at the family level, not at the variant level, so that no variants from the same family appear in both discovery and test.
+
+    \item \textbf{Estimate the discovery graph.} Run the conditioned model $M(C)$ on all discovery families with deterministic decoding. Compute $I_{\text{act}}(f)$ for every family, then estimate $w_{ij}$, $b_i$, $I_{\text{single}}(i)$, and $E_{\text{pair}}(i,j)$ on the discovery split. For pair-targeted families, also compute the auxiliary directional quantities $I_{\text{dir}}(f)$, $I_{\text{dir-pair}}(i,j)$, and $O_{\text{pair}}(i,j)$ wherever the responses are directionally scorable.
+
+    \item \textbf{Quantify reproducibility across independently authored families.} For each pair $(i,j)$, partition its discovery families into two disjoint halves $F^A_{ij}$ and $F^B_{ij}$, and estimate $w^A_{ij}$ and $w^B_{ij}$ independently:
+    \[
+    w^A_{ij}=\frac{1}{|F^A_{ij}|}\sum_{f\in F^A_{ij}} I_{\text{act}}(f), \qquad
+    w^B_{ij}=\frac{1}{|F^B_{ij}|}\sum_{f\in F^B_{ij}} I_{\text{act}}(f).
+    \]
+    The primary reproducibility statistic is
+    \[
+    \rho_{\text{split}}=\mathrm{Spearman}\left(\{w^A_{ij}\}_{i<j}, \{w^B_{ij}\}_{i<j}\right).
+    \]
+    We report bootstrap confidence intervals by resampling families within clause pairs. If reproducibility is weak, the paper stops at descriptive analysis and does not proceed to graph-guided refinement claims. For the auxiliary directional layer, we report the same split-half analysis as a secondary diagnostic on the subset of pairs for which both halves contain directionally scorable families.
+
+    \item \textbf{Evaluate pair-specific predictive value on held-out families.} For each held-out test family $f\in F^{\text{test}}_{ij}$, define the graph predictor
+    \[
+    \hat{I}_{\text{graph}}(f)=w^{\text{disc}}_{ij},
+    \]
+    where $w^{\text{disc}}_{ij}$ is the edge weight estimated from the discovery split only. Compare it to the main-effects baseline
+    \[
+    \hat{I}_{\text{main}}(f)=\hat{\alpha}+\hat{\beta}_i+\hat{\beta}_j+\hat{\gamma}^\top m_f
+    \]
+    fit on the discovery split. The evaluation metric is mean squared error:
+    \[
+    \mathrm{MSE}_{\text{graph}}=\frac{1}{|F^{\text{test}}|}\sum_{f\in F^{\text{test}}}\left(I_{\text{act}}(f)-\hat{I}_{\text{graph}}(f)\right)^2,
+    \]
+    with $\mathrm{MSE}_{\text{main}}$ defined analogously. This is a modest prediction task: predicting held-out instability for new families from already-observed clause pairs. We do not claim graph-topology generalization beyond that.
+
+    \item \textbf{Select hotspot pairs conservatively.} Define the hotspot set $H$ as the top $K$ pairs by $w_{ij}$ on the discovery split, with $K=3$ in v2, subject to two reliability conditions:
+    \begin{enumerate}
+        \item the pair ranks in the top quartile in the full discovery estimate;
+        \item the pair also ranks in the top quartile in both family-half estimates $w^A_{ij}$ and $w^B_{ij}$.
+    \end{enumerate}
+    A pair that is high only because of one half-split is not revised in v2.
+
+    In parallel, define a \textbf{directionality watch-list} of pairs with low or moderate $w_{ij}$ but unusually high $I_{\text{dir-pair}}(i,j)$. These pairs are not promoted to primary hotspots on the basis of directionality alone, but they are flagged for manual inspection because they may be action-stable yet directionally unstable.
+
+    \item \textbf{Revise the implicated clauses, not the whole specification.} Produce a revised specification $C'$ by editing only the clauses incident to pairs in $H$. Revisions must be local and minimal. Allowed edit types are:
+    \begin{enumerate}
+        \item scope clarification;
+        \item explicit exception or boundary clarification;
+        \item precedence clarification in a narrowly stated conflict pattern;
+        \item replacement of vague wording with operational wording.
+    \end{enumerate}
+    Revisions must not introduce new high-level values, new unrelated policy content, or broad stylistic rewrites. For each edited clause, record a short edit rationale and whether the edit is intended to reduce ambiguity at creation time or application time.
+
+    \item \textbf{Re-apply the same conditioning operator to the same base model.} Construct $M(C')=A(B,C')$ using the same base model, same system prompt scaffold, and same decoding settings. No other experimental factor changes.
+
+    \item \textbf{Evaluate the revised specification on the frozen test split only.} Re-run the frozen test families under $M(C')$ and compute all test metrics again. The primary intervention outcomes are:
+    \[
+    \Delta_{\text{target}}=\frac{1}{|H|}\sum_{(i,j)\in H}\left(I'_{\text{pair,test}}(i,j)-I_{\text{pair,test}}(i,j)\right),
+    \]
+    \[
+    \Delta_{\text{off}}=\frac{1}{|E\setminus H|}\sum_{(i,j)\notin H}\left(I'_{\text{pair,test}}(i,j)-I_{\text{pair,test}}(i,j)\right),
+    \]
+    \[
+    \Delta_{\text{inad}}=\bar{E}'_{\text{inad,test}}-\bar{E}_{\text{inad,test}}.
+    \]
+    As a secondary intervention diagnostic, for the subset of test families that are directionally scorable under both $M(C)$ and $M(C')$, we also report
+    \[
+    \Delta_{\text{dir,target}}=\frac{1}{|H_{\dagger}|}\sum_{(i,j)\in H_{\dagger}}\left(I'_{\text{dir-pair,test}}(i,j)-I_{\text{dir-pair,test}}(i,j)\right),
+    \]
+    where $H_{\dagger}\subseteq H$ contains the hotspot pairs with directionally scorable test families. Success requires $\Delta_{\text{target}}<0$ with no material increase in $\Delta_{\text{inad}}$ and no large positive $\Delta_{\text{off}}$. A decrease in $\Delta_{\text{dir,target}}$ is supportive but secondary.
+\end{enumerate}
+
+\subsubsection{Useful Results from Graph}
+
+Information derived from the v2 graph is intentionally limited to what the methodology can support:
+\begin{enumerate}
+    \item \textbf{Pair hotspot identification:} which clause pairs produce the highest reproducible action-instability under equivalence-preserving perturbations.
+    \item \textbf{Hidden arbitrariness detection:} which pairs are action-stable or only mildly action-unstable but still show substantial directionality instability.
+    \item \textbf{Clause burden ranking:} which clauses most often participate in unstable pairwise interactions.
+    \item \textbf{Control comparison:} whether a pair's instability is large relative to the instability of the corresponding single-clause controls and the main-effects baseline.
+    \item \textbf{Directional tendency summary:} whether a pair appears, under the auxiliary rubric, to lean toward clause $i$ or clause $j$ when the action is held fixed.
+    \item \textbf{Refinement prioritization:} which small set of clause pairs should be considered first for conservative rewriting.
+    \item \textbf{Post-revision audit:} whether targeted clause edits reduce held-out instability without increasing inadmissible actions.
+\end{enumerate}
+
+The graph does \textbf{not} identify the unique hidden basis of any response, and it does \textbf{not} by itself prove that a specification contains a logical contradiction. It is a behavioral map of where a fixed conditioned model is unstable. The auxiliary directional layer is also not a recovered decisive basis. It is a noisy readout of how the response appears to balance the target clauses under a family-specific rubric.
+
+\subsubsection{Expected Result}
+
+We expect three main outcomes.
+
+First, pairwise edge weights will show positive family-split reproducibility, indicating that some clause-pair instabilities are not artifacts of a single authored family. Second, held-out family instability for a clause pair will be better predicted by the discovered pair-specific edge weight than by a clause-main-effects baseline alone. Third, a conservative rewrite of the few clauses implicated by the most reliable hotspot pairs will reduce held-out instability on those targeted pairs, while leaving inadmissibility and off-target behavior approximately unchanged. In addition, we expect some pairs with low action-instability to display non-trivial directionality instability, showing that basis-level arbitrariness can remain hidden when one observes only the final action tag.
+
+The strongest defensible result is therefore not "we recovered the true topology of the specification." It is:
+
+\textbf{For a fixed conditioned model, a clause-pair instability graph can be reproducibly estimated, and it can support conservative, testable specification refinement on held-out scenario families.}
+
+If these outcomes fail, that is still informative. Weak reproducibility means the current benchmark is not yet stable enough for graph claims. Weak intervention results mean the graph may be descriptive but not yet useful for revision. Both are scientifically valuable negative results.
+
+\subsubsection{Contributions}
+
+\begin{enumerate}
+    \item a clean behavioral estimand for conflict graphs: pairwise action-instability for atomic clauses in a fixed conditioned model;
+    \item a compact clause-pair benchmark design based on family-level weak labels and equivalence-preserving perturbations;
+    \item a lightweight auxiliary directional scoring layer that can reveal action-stable but directionally unstable clause pairs without making the project depend on full latent-basis inference;
+    \item a reproducible graph estimation procedure that avoids dependence on cross-model pooling and latent normative-basis inference;
+    \item a frozen-test intervention protocol for evaluating whether graph-guided clause revision improves behavior without obvious semantic drift.
+\end{enumerate}
+
+\subsubsection{Future Extensions}
+
+\begin{enumerate}
+    \item extend from system-prompt conditioning to light SFT or preference-based post-training while keeping the base model fixed;
+    \item compare the rubric-based directional scorer to structured clause-citation stability or other directional proxies on a human-audited subset;
+    \item study boundary-case counterfactuals and lexical cue manipulation as separate diagnostics rather than as part of the core instability metric;
+    \item compare graphs across multiple base models only after the single-model study is stable;
+    \item explore automated revision aids, including reflective prompt or rule-edit search with explicit edit constraints, as an optimization layer on top of the human-authored refinement loop.
+\end{enumerate}
