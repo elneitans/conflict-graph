@@ -1,9 +1,9 @@
 #!/bin/bash
-#SBATCH --job-name=OLMO_collect
+#SBATCH --job-name=OLMO_collect_full_7b
 #SBATCH -p ialab
-#SBATCH --cpus-per-task=32
+#SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:1
-#SBATCH --time=16:00:00
+#SBATCH --time=08:00:00
 #SBATCH -w antuco
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
@@ -31,17 +31,11 @@ export HF_HUB_CACHE="${HF_HUB_CACHE:-$HF_HOME/hub}"
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$HF_HOME/datasets}"
 unset TRANSFORMERS_CACHE
 mkdir -p "$HF_HOME" "$HF_HUB_CACHE" "$HF_DATASETS_CACHE"
-echo "HF_HOME=$HF_HOME"
-echo "HF_HUB_CACHE=$HF_HUB_CACHE"
-echo "HF_DATASETS_CACHE=$HF_DATASETS_CACHE"
-df -h "$PWD" "$HF_HOME" || true
-du -sh "$HF_HOME" 2>/dev/null || true
 
 export PYTORCH_HIP_ALLOC_CONF="${PYTORCH_HIP_ALLOC_CONF:-garbage_collection_threshold:0.8,max_split_size_mb:512}"
 export HF_HUB_ETAG_TIMEOUT="${HF_HUB_ETAG_TIMEOUT:-120}"
 export HF_HUB_DOWNLOAD_TIMEOUT="${HF_HUB_DOWNLOAD_TIMEOUT:-120}"
 
-# Important for ROCm visibility on antuco.
 unset CUDA_VISIBLE_DEVICES
 export ROCR_VISIBLE_DEVICES="${ROCR_VISIBLE_DEVICES:-0}"
 export HIP_VISIBLE_DEVICES="${ROCR_VISIBLE_DEVICES:-0}"
@@ -57,10 +51,6 @@ fi
 source "${CONDA_SH}"
 conda activate "${CONDA_ENV_NAME}"
 
-if [[ "${INSTALL_REQUIREMENTS:-0}" == "1" ]]; then
-  python -m pip install -r .requirements.txt
-fi
-
 echo "=== Environment preflight ==="
 echo "PWD=$PWD"
 echo "SLURM_SUBMIT_DIR=${SLURM_SUBMIT_DIR}"
@@ -71,48 +61,11 @@ echo "ROCR_VISIBLE_DEVICES=${ROCR_VISIBLE_DEVICES-UNSET}"
 echo "SLURM_JOB_GPUS=${SLURM_JOB_GPUS-UNSET}"
 echo "which python: $(which python)"
 python --version
-python -m pip show torch || true
-python -m pip show bitsandbytes || true
-if command -v module >/dev/null 2>&1; then
-  echo "=== module list ==="
-  module list 2>&1 || true
-fi
-if command -v rocminfo >/dev/null 2>&1; then
-  echo "=== rocminfo (first 40 lines) ==="
-  rocminfo 2>/dev/null | head -n 40 || true
-fi
-if command -v rocm-smi >/dev/null 2>&1; then
-  echo "=== rocm-smi ==="
-  rocm-smi || true
-fi
-
-python - <<'PY'
-import torch
-try:
-    import bitsandbytes as bnb
-    bnb_version = getattr(bnb, "__version__", "unknown")
-except Exception as exc:
-    bnb_version = f"IMPORT_FAILED: {exc!r}"
-info = {
-    "torch_version": torch.__version__,
-    "cuda_available": torch.cuda.is_available(),
-    "cuda_device_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
-    "hip_version": getattr(torch.version, "hip", None),
-    "cuda_version": getattr(torch.version, "cuda", None),
-    "bitsandbytes": bnb_version,
-}
-if torch.cuda.is_available():
-    info["device_name_0"] = torch.cuda.get_device_name(0)
-print(info)
-if not torch.cuda.is_available():
-    raise SystemExit(
-        "torch.cuda.is_available() is false. The active conda environment likely does not expose a ROCm-enabled PyTorch build, or the GPU is not visible in the job."
-    )
-PY
 
 python scripts/collect_olmo_responses.py \
   --dataset-root data/conflict_graphv2_provisional \
-  --run-name Olmo-3-1025-7B \
+  --selection all \
+  --run-name Olmo-3-1025-7B_full \
   --model-id allenai/Olmo-3-1025-7B \
   --dtype float16 \
   --quantization none \

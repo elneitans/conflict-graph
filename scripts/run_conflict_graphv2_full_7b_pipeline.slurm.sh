@@ -1,9 +1,9 @@
 #!/bin/bash
-#SBATCH --job-name=OLMO_collect
+#SBATCH --job-name=CGv2_full_7b_pipeline
 #SBATCH -p ialab
-#SBATCH --cpus-per-task=32
+#SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:1
-#SBATCH --time=16:00:00
+#SBATCH --time=08:00:00
 #SBATCH -w antuco
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
@@ -22,6 +22,11 @@ if [[ ! -f "scripts/collect_olmo_responses.py" || ! -f "data/conflict_graphv2_pr
   exit 1
 fi
 
+if [[ ! -f ".env" ]]; then
+  echo "Missing .env in repo root. Add DEEPSEEK_API_KEY there before submitting this pipeline." >&2
+  exit 1
+fi
+
 export PYTHONUNBUFFERED=1
 export TOKENIZERS_PARALLELISM=false
 export PYTHONNOUSERSITE=1
@@ -31,17 +36,11 @@ export HF_HUB_CACHE="${HF_HUB_CACHE:-$HF_HOME/hub}"
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$HF_HOME/datasets}"
 unset TRANSFORMERS_CACHE
 mkdir -p "$HF_HOME" "$HF_HUB_CACHE" "$HF_DATASETS_CACHE"
-echo "HF_HOME=$HF_HOME"
-echo "HF_HUB_CACHE=$HF_HUB_CACHE"
-echo "HF_DATASETS_CACHE=$HF_DATASETS_CACHE"
-df -h "$PWD" "$HF_HOME" || true
-du -sh "$HF_HOME" 2>/dev/null || true
 
 export PYTORCH_HIP_ALLOC_CONF="${PYTORCH_HIP_ALLOC_CONF:-garbage_collection_threshold:0.8,max_split_size_mb:512}"
 export HF_HUB_ETAG_TIMEOUT="${HF_HUB_ETAG_TIMEOUT:-120}"
 export HF_HUB_DOWNLOAD_TIMEOUT="${HF_HUB_DOWNLOAD_TIMEOUT:-120}"
 
-# Important for ROCm visibility on antuco.
 unset CUDA_VISIBLE_DEVICES
 export ROCR_VISIBLE_DEVICES="${ROCR_VISIBLE_DEVICES:-0}"
 export HIP_VISIBLE_DEVICES="${ROCR_VISIBLE_DEVICES:-0}"
@@ -57,62 +56,54 @@ fi
 source "${CONDA_SH}"
 conda activate "${CONDA_ENV_NAME}"
 
-if [[ "${INSTALL_REQUIREMENTS:-0}" == "1" ]]; then
-  python -m pip install -r .requirements.txt
+set -a
+source .env
+set +a
+
+if [[ -z "${DEEPSEEK_API_KEY:-}" ]]; then
+  echo "DEEPSEEK_API_KEY is not set after sourcing .env" >&2
+  exit 1
 fi
+
+RUN_NAME="${RUN_NAME:-Olmo-3-1025-7B_full}"
+RUN_DIR="data/conflict_graphv2_provisional/collections/runs/${RUN_NAME}"
+JUDGE_DIR="${RUN_DIR}/judging/deepseek_action_judge"
+SELF_METRICS_DIR="${RUN_DIR}/metrics_self_report"
+RESOLVED_METRICS_DIR="${RUN_DIR}/metrics_resolved_singleton"
 
 echo "=== Environment preflight ==="
 echo "PWD=$PWD"
 echo "SLURM_SUBMIT_DIR=${SLURM_SUBMIT_DIR}"
 echo "CONDA_ENV_NAME=${CONDA_ENV_NAME}"
+echo "RUN_NAME=${RUN_NAME}"
+echo "RUN_DIR=${RUN_DIR}"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES-UNSET}"
 echo "HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES-UNSET}"
 echo "ROCR_VISIBLE_DEVICES=${ROCR_VISIBLE_DEVICES-UNSET}"
 echo "SLURM_JOB_GPUS=${SLURM_JOB_GPUS-UNSET}"
 echo "which python: $(which python)"
 python --version
-python -m pip show torch || true
-python -m pip show bitsandbytes || true
-if command -v module >/dev/null 2>&1; then
-  echo "=== module list ==="
-  module list 2>&1 || true
-fi
-if command -v rocminfo >/dev/null 2>&1; then
-  echo "=== rocminfo (first 40 lines) ==="
-  rocminfo 2>/dev/null | head -n 40 || true
-fi
-if command -v rocm-smi >/dev/null 2>&1; then
-  echo "=== rocm-smi ==="
-  rocm-smi || true
-fi
 
 python - <<'PY'
 import torch
-try:
-    import bitsandbytes as bnb
-    bnb_version = getattr(bnb, "__version__", "unknown")
-except Exception as exc:
-    bnb_version = f"IMPORT_FAILED: {exc!r}"
 info = {
     "torch_version": torch.__version__,
     "cuda_available": torch.cuda.is_available(),
     "cuda_device_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
     "hip_version": getattr(torch.version, "hip", None),
-    "cuda_version": getattr(torch.version, "cuda", None),
-    "bitsandbytes": bnb_version,
 }
 if torch.cuda.is_available():
     info["device_name_0"] = torch.cuda.get_device_name(0)
 print(info)
 if not torch.cuda.is_available():
-    raise SystemExit(
-        "torch.cuda.is_available() is false. The active conda environment likely does not expose a ROCm-enabled PyTorch build, or the GPU is not visible in the job."
-    )
+    raise SystemExit("No ROCm/CUDA device visible to PyTorch. Check the antuco environment and Slurm GPU allocation.")
 PY
 
+echo "=== Step 1/4: full 7B collection ==="
 python scripts/collect_olmo_responses.py \
   --dataset-root data/conflict_graphv2_provisional \
-  --run-name Olmo-3-1025-7B \
+  --selection all \
+  --run-name "${RUN_NAME}" \
   --model-id allenai/Olmo-3-1025-7B \
   --dtype float16 \
   --quantization none \
@@ -120,3 +111,26 @@ python scripts/collect_olmo_responses.py \
   --max-memory-per-gpu 46GiB \
   --attn-implementation eager \
   --max-new-tokens 512
+
+echo "=== Step 2/4: DeepSeek judge ==="
+python scripts/judge_conflict_graphv2_actions.py \
+  --run-dir "${RUN_DIR}"
+
+echo "=== Step 3/4: self-report metrics ==="
+python scripts/compute_conflict_graphv2_metrics.py \
+  --run-dir "${RUN_DIR}" \
+  --action-source self_report \
+  --output-dir "${SELF_METRICS_DIR}"
+
+echo "=== Step 4/4: resolved-singleton metrics ==="
+python scripts/compute_conflict_graphv2_metrics.py \
+  --run-dir "${RUN_DIR}" \
+  --action-source resolved_actions \
+  --resolved-actions-jsonl "${JUDGE_DIR}/resolved_actions.jsonl" \
+  --output-dir "${RESOLVED_METRICS_DIR}"
+
+echo "=== Pipeline complete ==="
+echo "Run dir: ${RUN_DIR}"
+echo "Judge dir: ${JUDGE_DIR}"
+echo "Self metrics: ${SELF_METRICS_DIR}"
+echo "Resolved metrics: ${RESOLVED_METRICS_DIR}"

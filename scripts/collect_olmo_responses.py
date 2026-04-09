@@ -34,9 +34,16 @@ EXPECTED_PROMPT_FIELDS = {
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Collect greedy OLMo responses over the conflict_graphv2 pilot prompt set.")
+    parser = argparse.ArgumentParser(description="Collect greedy OLMo responses over the conflict_graphv2 prompt set.")
     parser.add_argument("--dataset-root", type=Path, default=Path("data/conflict_graphv2_provisional"))
     parser.add_argument("--pilot-manifest", type=Path, default=None)
+    parser.add_argument("--family-manifest", type=Path, default=None)
+    parser.add_argument(
+        "--selection",
+        choices=["pilot", "all", "manifest"],
+        default="pilot",
+        help="Choose whether to collect the pilot subset, the full prompt table, or a custom manifest-defined family subset.",
+    )
     parser.add_argument("--prompt-table", type=Path, default=None)
     parser.add_argument("--clause-registry", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, default=None)
@@ -118,21 +125,21 @@ def validate_prompt_row(row: dict[str, Any], source: Path) -> None:
         raise ValueError(f"Prompt row {row['prompt_id']} has invalid variant_id {row['variant_id']}")
 
 
-def load_pilot_prompts(prompt_table_path: Path, pilot_manifest_path: Path) -> list[dict[str, Any]]:
+def load_prompts_from_manifest(prompt_table_path: Path, manifest_path: Path) -> list[dict[str, Any]]:
     prompt_rows = read_jsonl(prompt_table_path)
     for row in prompt_rows:
         validate_prompt_row(row, prompt_table_path)
 
-    pilot_manifest = read_json(pilot_manifest_path)
-    family_ids = pilot_manifest.get("family_ids")
+    manifest = read_json(manifest_path)
+    family_ids = manifest.get("family_ids")
     if not isinstance(family_ids, list) or not family_ids:
-        raise ValueError(f"{pilot_manifest_path} must contain a non-empty family_ids list")
+        raise ValueError(f"{manifest_path} must contain a non-empty family_ids list")
     family_ids_set = set(family_ids)
 
     selected = [row for row in prompt_rows if row["family_id"] in family_ids_set]
     if len(selected) != len(family_ids_set) * 5:
         raise ValueError(
-            f"Expected {len(family_ids_set) * 5} pilot prompt rows from {pilot_manifest_path}, found {len(selected)}"
+            f"Expected {len(family_ids_set) * 5} prompt rows from {manifest_path}, found {len(selected)}"
         )
 
     counts = Counter(row["family_id"] for row in selected)
@@ -142,6 +149,17 @@ def load_pilot_prompts(prompt_table_path: Path, pilot_manifest_path: Path) -> li
 
     ordered = sorted(selected, key=lambda row: (row["family_id"], row["variant_id"]))
     return ordered
+
+
+def load_all_prompts(prompt_table_path: Path) -> list[dict[str, Any]]:
+    prompt_rows = read_jsonl(prompt_table_path)
+    for row in prompt_rows:
+        validate_prompt_row(row, prompt_table_path)
+    counts = Counter(row["family_id"] for row in prompt_rows)
+    bad_counts = {family_id: count for family_id, count in counts.items() if count != 5}
+    if bad_counts:
+        raise ValueError(f"All-family prompt rows must appear exactly 5 times each: {bad_counts}")
+    return sorted(prompt_rows, key=lambda row: (row["family_id"], row["variant_id"]))
 
 
 def build_system_prompt(clause_rows: list[dict[str, str]]) -> str:
@@ -363,6 +381,7 @@ def ensure_parent(path: Path) -> None:
 def main() -> None:
     args = parse_args()
     args.pilot_manifest = args.pilot_manifest or args.dataset_root / "manifests" / "pilot_manifest.json"
+    args.family_manifest = args.family_manifest or args.pilot_manifest
     args.prompt_table = args.prompt_table or args.dataset_root / "prompt_table.jsonl"
     args.clause_registry = args.clause_registry or args.dataset_root / "clause_registry.csv"
     args.output_dir = args.output_dir or args.dataset_root / "collections" / "runs"
@@ -371,7 +390,15 @@ def main() -> None:
         raise SystemExit(f"Dataset root not found: {args.dataset_root}")
 
     clause_rows = read_clause_registry(args.clause_registry)
-    prompt_rows = load_pilot_prompts(args.prompt_table, args.pilot_manifest)
+    if args.selection == "pilot":
+        prompt_rows = load_prompts_from_manifest(args.prompt_table, args.pilot_manifest)
+        selection_detail = str(args.pilot_manifest.resolve())
+    elif args.selection == "manifest":
+        prompt_rows = load_prompts_from_manifest(args.prompt_table, args.family_manifest)
+        selection_detail = str(args.family_manifest.resolve())
+    else:
+        prompt_rows = load_all_prompts(args.prompt_table)
+        selection_detail = "ALL_FAMILIES"
     if args.limit is not None:
         prompt_rows = prompt_rows[: args.limit]
     if not prompt_rows:
@@ -454,7 +481,10 @@ def main() -> None:
         "started_at_utc": started_at,
         "ended_at_utc": ended_at,
         "dataset_root": str(args.dataset_root.resolve()),
+        "selection": args.selection,
+        "selection_detail": selection_detail,
         "pilot_manifest": str(args.pilot_manifest.resolve()),
+        "family_manifest": str(args.family_manifest.resolve()) if args.selection == "manifest" else None,
         "prompt_table": str(args.prompt_table.resolve()),
         "clause_registry": str(args.clause_registry.resolve()),
         "output_jsonl": str(output_path.resolve()),

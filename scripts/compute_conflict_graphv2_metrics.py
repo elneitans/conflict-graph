@@ -61,6 +61,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--directional-scores-jsonl", type=Path, default=None)
+    parser.add_argument(
+        "--action-source",
+        choices=["self_report", "resolved_actions"],
+        default="self_report",
+        help="Choose whether metrics are computed from the raw self-reported action tag channel or the resolved singleton label view.",
+    )
+    parser.add_argument("--resolved-actions-jsonl", type=Path, default=None)
     return parser.parse_args()
 
 
@@ -126,6 +133,23 @@ def validate_response_row(row: dict[str, Any], source: Path) -> None:
         raise ValueError(f"Response row {row.get('prompt_id')} in {source} missing fields {sorted(missing)}")
 
 
+def validate_resolved_row(row: dict[str, Any], source: Path) -> None:
+    required = {
+        "prompt_id",
+        "resolved_action_tag",
+        "resolved_action_source",
+        "judge_status",
+        "self_parse_status",
+        "self_action_tag",
+    }
+    missing = required - row.keys()
+    if missing:
+        raise ValueError(f"Resolved row {row.get('prompt_id')} in {source} missing fields {sorted(missing)}")
+    tag = row["resolved_action_tag"]
+    if tag is not None and tag not in ACTION_TAGS:
+        raise ValueError(f"Resolved row {row['prompt_id']} has invalid resolved_action_tag {tag!r}")
+
+
 def parse_status_effective(row: dict[str, Any]) -> str:
     if row.get("response_missing"):
         return "missing_response_row"
@@ -151,6 +175,74 @@ def mean_or_none(values: list[float]) -> float | None:
 
 def ratio_or_none(numerator: int, denominator: int) -> float | None:
     return None if denominator == 0 else numerator / denominator
+
+
+def median_or_none(values: list[float]) -> float | None:
+    values = sorted(value for value in values if value is not None)
+    if not values:
+        return None
+    mid = len(values) // 2
+    if len(values) % 2 == 1:
+        return values[mid]
+    return (values[mid - 1] + values[mid]) / 2.0
+
+
+def pearson_correlation(xs: list[float], ys: list[float]) -> float | None:
+    if len(xs) != len(ys) or len(xs) < 2:
+        return None
+    x_mean = mean(xs)
+    y_mean = mean(ys)
+    num = sum((x - x_mean) * (y - y_mean) for x, y in zip(xs, ys))
+    den_x = sum((x - x_mean) ** 2 for x in xs) ** 0.5
+    den_y = sum((y - y_mean) ** 2 for y in ys) ** 0.5
+    if den_x == 0 or den_y == 0:
+        return None
+    return num / (den_x * den_y)
+
+
+def rank_average(values: list[float]) -> list[float]:
+    indexed = sorted(enumerate(values), key=lambda item: item[1])
+    ranks = [0.0] * len(values)
+    i = 0
+    while i < len(indexed):
+        j = i
+        while j + 1 < len(indexed) and indexed[j + 1][1] == indexed[i][1]:
+            j += 1
+        avg_rank = (i + j + 2) / 2.0
+        for k in range(i, j + 1):
+            ranks[indexed[k][0]] = avg_rank
+        i = j + 1
+    return ranks
+
+
+def spearman_correlation(xs: list[float], ys: list[float]) -> float | None:
+    if len(xs) != len(ys) or len(xs) < 2:
+        return None
+    return pearson_correlation(rank_average(xs), rank_average(ys))
+
+
+def solve_linear_system(matrix: list[list[float]], vector: list[float]) -> list[float] | None:
+    n = len(vector)
+    if n == 0:
+        return []
+    augmented = [row[:] + [vector[idx]] for idx, row in enumerate(matrix)]
+    for pivot_idx in range(n):
+        pivot_row = max(range(pivot_idx, n), key=lambda row_idx: abs(augmented[row_idx][pivot_idx]))
+        if abs(augmented[pivot_row][pivot_idx]) < 1e-12:
+            return None
+        augmented[pivot_idx], augmented[pivot_row] = augmented[pivot_row], augmented[pivot_idx]
+        pivot = augmented[pivot_idx][pivot_idx]
+        for col in range(pivot_idx, n + 1):
+            augmented[pivot_idx][col] /= pivot
+        for row_idx in range(n):
+            if row_idx == pivot_idx:
+                continue
+            factor = augmented[row_idx][pivot_idx]
+            if factor == 0:
+                continue
+            for col in range(pivot_idx, n + 1):
+                augmented[row_idx][col] -= factor * augmented[pivot_idx][col]
+    return [augmented[row_idx][n] for row_idx in range(n)]
 
 
 def modal_action_info(parsed_actions: list[str]) -> tuple[str | None, bool, list[str]]:
@@ -200,18 +292,21 @@ def build_directional_join_status(path: Path | None, valid_prompt_ids: set[str])
     }
 
 
-def load_run_inputs(dataset_root: Path, run_dir: Path) -> dict[str, Any]:
+def load_run_inputs(dataset_root: Path, run_dir: Path, action_source: str, resolved_actions_jsonl: Path | None) -> dict[str, Any]:
     prompt_rows = load_jsonl(dataset_root / "prompt_table.jsonl")
     family_rows = load_jsonl(dataset_root / "family_sheets.jsonl")
     clause_rows = load_csv(dataset_root / "clause_registry.csv")
     pair_rows = load_csv(dataset_root / "pair_registry.csv")
     run_manifest = load_json(run_dir / "run_manifest.json")
     response_rows = load_jsonl(run_dir / "responses.jsonl")
+    resolved_rows = load_jsonl(resolved_actions_jsonl) if resolved_actions_jsonl is not None else []
 
     for row in prompt_rows:
         validate_prompt_row(row, dataset_root / "prompt_table.jsonl")
     for row in response_rows:
         validate_response_row(row, run_dir / "responses.jsonl")
+    for row in resolved_rows:
+        validate_resolved_row(row, resolved_actions_jsonl)
 
     prompt_by_id: dict[str, dict[str, Any]] = {}
     prompt_ids_by_family: dict[str, list[str]] = defaultdict(list)
@@ -226,6 +321,7 @@ def load_run_inputs(dataset_root: Path, run_dir: Path) -> dict[str, Any]:
     pair_by_id = {row["pair_id"]: row for row in pair_rows}
 
     response_by_prompt: dict[str, dict[str, Any]] = {}
+    resolved_by_prompt: dict[str, dict[str, Any]] = {}
     unique_run_ids = set()
     unique_model_ids = set()
     unique_spec_hashes = set()
@@ -242,6 +338,12 @@ def load_run_inputs(dataset_root: Path, run_dir: Path) -> dict[str, Any]:
         unique_run_ids.add(row["run_id"])
         unique_model_ids.add(row["model_id"])
         unique_spec_hashes.add(row["system_prompt_sha256"])
+
+    for row in resolved_rows:
+        prompt_id = row["prompt_id"]
+        require(prompt_id not in resolved_by_prompt, f"Duplicate prompt_id in resolved actions JSONL: {prompt_id}")
+        require(prompt_id in prompt_by_id, f"Resolved actions reference unknown prompt_id: {prompt_id}")
+        resolved_by_prompt[prompt_id] = row
 
     require(len(unique_run_ids) == 1, f"Expected exactly one run_id in responses.jsonl, found {sorted(unique_run_ids)}")
     require(len(unique_model_ids) == 1, f"Expected exactly one model_id in responses.jsonl, found {sorted(unique_model_ids)}")
@@ -292,9 +394,26 @@ def load_run_inputs(dataset_root: Path, run_dir: Path) -> dict[str, Any]:
                 combined["response_missing"] = False
 
             combined["effective_parse_status"] = parse_status_effective(combined)
-            combined["is_parsed"] = combined["effective_parse_status"] == "parsed"
+            if action_source == "resolved_actions":
+                resolved_row = resolved_by_prompt.get(prompt_id)
+                require(resolved_row is not None, f"Resolved action row missing for prompt_id: {prompt_id}")
+                combined["resolved_action_tag"] = resolved_row["resolved_action_tag"]
+                combined["resolved_action_source"] = resolved_row["resolved_action_source"]
+                combined["resolved_judge_status"] = resolved_row["judge_status"]
+                combined["analysis_action_tag"] = resolved_row["resolved_action_tag"] if resolved_row["resolved_action_tag"] in ACTION_TAGS else None
+                combined["analysis_action_source"] = resolved_row["resolved_action_source"]
+                combined["analysis_parse_status"] = "parsed" if combined["analysis_action_tag"] in ACTION_TAGS else "unresolved"
+            else:
+                combined["resolved_action_tag"] = None
+                combined["resolved_action_source"] = None
+                combined["resolved_judge_status"] = None
+                combined["analysis_action_tag"] = combined["action_tag"] if combined["effective_parse_status"] == "parsed" else None
+                combined["analysis_action_source"] = "self_report" if combined["analysis_action_tag"] in ACTION_TAGS else "unresolved"
+                combined["analysis_parse_status"] = combined["effective_parse_status"]
+
+            combined["is_parsed"] = combined["analysis_action_tag"] in ACTION_TAGS and combined["analysis_parse_status"] == "parsed"
             combined["is_admissible"] = (
-                combined["action_tag"] in combined["admissible_actions"] if combined["is_parsed"] else None
+                combined["analysis_action_tag"] in combined["admissible_actions"] if combined["is_parsed"] else None
             )
             combined["is_pair_family"] = combined["target_type"] == "pair"
             combined["is_control_family"] = combined["target_type"] == "control"
@@ -314,6 +433,8 @@ def load_run_inputs(dataset_root: Path, run_dir: Path) -> dict[str, Any]:
         "run_id": run_id,
         "model_id": model_id,
         "system_prompt_sha256": system_prompt_sha256,
+        "action_source": action_source,
+        "resolved_actions_jsonl": str(resolved_actions_jsonl.resolve()) if resolved_actions_jsonl is not None else None,
     }
 
 
@@ -327,7 +448,7 @@ def compute_family_metrics(joined_rows: list[dict[str, Any]]) -> list[dict[str, 
         rows = sorted(rows_by_family[family_id], key=lambda row: row["variant_id"])
         first = rows[0]
         parsed_rows = [row for row in rows if row["is_parsed"]]
-        parsed_actions = [row["action_tag"] for row in parsed_rows]
+        parsed_actions = [row["analysis_action_tag"] for row in parsed_rows]
         n_total = len(rows)
         n_observed = sum(1 for row in rows if not row["response_missing"])
         n_parsed = len(parsed_rows)
@@ -335,7 +456,8 @@ def compute_family_metrics(joined_rows: list[dict[str, Any]]) -> list[dict[str, 
         modal_action, has_unique_modal_action, modal_candidates = modal_action_info(parsed_actions)
         status, unscorable_reason = family_status_from_counts(n_parsed, n_total)
         parsed_action_counts = dict(Counter(parsed_actions))
-        effective_parse_status_counts = dict(Counter(row["effective_parse_status"] for row in rows))
+        effective_parse_status_counts = dict(Counter(row["analysis_parse_status"] for row in rows))
+        action_source_counts = dict(Counter(row["analysis_action_source"] for row in rows))
         inadmissible_count = sum(1 for row in parsed_rows if row["is_admissible"] is False)
         family_metrics.append(
             {
@@ -357,6 +479,7 @@ def compute_family_metrics(joined_rows: list[dict[str, Any]]) -> list[dict[str, 
                 "prompt_count_parsed": prompt_count_parsed,
                 "parsed_action_counts": parsed_action_counts,
                 "effective_parse_status_counts": effective_parse_status_counts,
+                "analysis_action_source_counts": action_source_counts,
                 "modal_action": modal_action,
                 "has_unique_modal_action": has_unique_modal_action,
                 "modal_action_candidates": modal_candidates,
@@ -406,8 +529,12 @@ def compute_pair_metrics(
         undet = subset_summary([row for row in family_rows if row["determinate_status"] == "underdeterminate"])
         discovery = subset_summary([row for row in family_rows if row["split"] == "discovery"])
         test = subset_summary([row for row in family_rows if row["split"] == "test"])
+        half_a = subset_summary([row for row in family_rows if row["split"] == "discovery" and row["family_slot"] in {"D1", "D2"}])
+        half_b = subset_summary([row for row in family_rows if row["split"] == "discovery" and row["family_slot"] in {"D3", "D4"}])
         eligible_discovery = discovery["n_families_eligible"]
         eligible_test = test["n_families_eligible"]
+        reproducibility_pair_computable = half_a["n_families_eligible"] >= 1 and half_b["n_families_eligible"] >= 1
+        predictive_pair_computable = eligible_discovery >= 1 and eligible_test >= 1
         pair_rows.append(
             {
                 "pair_id": pair_id,
@@ -438,13 +565,21 @@ def compute_pair_metrics(
                 "E_pair_discovery": discovery["E_mean"],
                 "n_families_total_discovery": discovery["n_families_total"],
                 "n_families_eligible_discovery": eligible_discovery,
+                "I_pair_half_a": half_a["I_mean"],
+                "E_pair_half_a": half_a["E_mean"],
+                "n_families_total_half_a": half_a["n_families_total"],
+                "n_families_eligible_half_a": half_a["n_families_eligible"],
+                "I_pair_half_b": half_b["I_mean"],
+                "E_pair_half_b": half_b["E_mean"],
+                "n_families_total_half_b": half_b["n_families_total"],
+                "n_families_eligible_half_b": half_b["n_families_eligible"],
                 "I_pair_test": test["I_mean"],
                 "E_pair_test": test["E_mean"],
                 "n_families_total_test": test["n_families_total"],
                 "n_families_eligible_test": eligible_test,
                 "zero_eligible_families": overall["n_families_eligible"] == 0,
-                "split_half_pair_computable": eligible_discovery >= 4,
-                "predictive_pair_computable": eligible_discovery >= 1 and eligible_test >= 1,
+                "split_half_pair_computable": reproducibility_pair_computable,
+                "predictive_pair_computable": predictive_pair_computable,
             }
         )
     return pair_rows
@@ -536,17 +671,185 @@ def computability_flags(pair_metrics: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def provisional_stability_label(spearman_rho: float | None, median_abs_gap: float | None, comparable_pairs: int) -> str:
+    if comparable_pairs < 3 or spearman_rho is None or median_abs_gap is None:
+        return "not_computable"
+    if spearman_rho >= 0.50 and median_abs_gap <= 0.20:
+        return "looks_stable"
+    if spearman_rho <= 0.20 or median_abs_gap > 0.35:
+        return "does_not_look_stable"
+    return "inconclusive"
+
+
+def provisional_prediction_label(mse_graph: float | None, mse_main: float | None, spearman_rho: float | None, comparable_rows: int) -> str:
+    if comparable_rows < 3 or mse_graph is None or mse_main is None:
+        return "not_computable"
+    if mse_graph < mse_main and (spearman_rho is None or spearman_rho > 0):
+        return "looks_promising"
+    if mse_graph >= mse_main or (spearman_rho is not None and spearman_rho <= 0):
+        return "does_not_look_promising"
+    return "inconclusive"
+
+
+def compute_reproducibility_summary(pair_metrics: list[dict[str, Any]]) -> dict[str, Any]:
+    comparable = [
+        row for row in pair_metrics if row["I_pair_half_a"] is not None and row["I_pair_half_b"] is not None and row["split_half_pair_computable"]
+    ]
+    half_a = [row["I_pair_half_a"] for row in comparable]
+    half_b = [row["I_pair_half_b"] for row in comparable]
+    abs_gaps = [abs(a - b) for a, b in zip(half_a, half_b)]
+    top_a = [row["pair_id"] for row in sorted(comparable, key=lambda row: (-row["I_pair_half_a"], row["pair_id"]))[:2]]
+    top_b = [row["pair_id"] for row in sorted(comparable, key=lambda row: (-row["I_pair_half_b"], row["pair_id"]))[:2]]
+    return {
+        "half_definition": {"A": ["D1", "D2"], "B": ["D3", "D4"]},
+        "pair_count_comparable": len(comparable),
+        "pair_ids_comparable": [row["pair_id"] for row in comparable],
+        "spearman_rho": spearman_correlation(half_a, half_b),
+        "mean_absolute_half_gap": mean_or_none(abs_gaps),
+        "median_absolute_half_gap": median_or_none(abs_gaps),
+        "top2_half_a_pair_ids": top_a,
+        "top2_half_b_pair_ids": top_b,
+        "top2_overlap_count": len(set(top_a) & set(top_b)),
+        "provisional_readout": provisional_stability_label(
+            spearman_correlation(half_a, half_b),
+            median_or_none(abs_gaps),
+            len(comparable),
+        ),
+    }
+
+
+def fit_clause_main_effects_baseline(family_metrics: list[dict[str, Any]], clause_ids: list[str]) -> dict[str, Any]:
+    train_rows = [
+        row
+        for row in family_metrics
+        if row["target_type"] == "pair" and row["split"] == "discovery" and row["primary_metric_eligible"] and row["I_act"] is not None
+    ]
+    kept_clause_ids = clause_ids[:-1]
+    if not train_rows:
+        return {"computable": False, "reason": "no eligible discovery pair families", "coefficients": None, "kept_clause_ids": kept_clause_ids}
+
+    X: list[list[float]] = []
+    y: list[float] = []
+    for row in train_rows:
+        pair_clauses = set(row["target_clauses"])
+        features = [1.0] + [1.0 if clause_id in pair_clauses else 0.0 for clause_id in kept_clause_ids]
+        X.append(features)
+        y.append(float(row["I_act"]))
+
+    dim = len(X[0])
+    xtx = [[0.0 for _ in range(dim)] for _ in range(dim)]
+    xty = [0.0 for _ in range(dim)]
+    for features, target in zip(X, y):
+        for i in range(dim):
+            xty[i] += features[i] * target
+            for j in range(dim):
+                xtx[i][j] += features[i] * features[j]
+
+    solution = solve_linear_system(xtx, xty)
+    if solution is None:
+        return {"computable": False, "reason": "main-effects normal equations are singular", "coefficients": None, "kept_clause_ids": kept_clause_ids}
+
+    coefficients = {"intercept": solution[0]}
+    for idx, clause_id in enumerate(kept_clause_ids, start=1):
+        coefficients[clause_id] = solution[idx]
+    return {
+        "computable": True,
+        "reason": None,
+        "coefficients": coefficients,
+        "kept_clause_ids": kept_clause_ids,
+        "training_family_count": len(train_rows),
+    }
+
+
+def predict_clause_main_effects(target_clauses: list[str], baseline_model: dict[str, Any]) -> float | None:
+    if not baseline_model.get("computable"):
+        return None
+    coeffs = baseline_model["coefficients"]
+    pred = coeffs["intercept"]
+    for clause_id in target_clauses:
+        pred += coeffs.get(clause_id, 0.0)
+    return pred
+
+
+def compute_heldout_prediction_summary(
+    family_metrics: list[dict[str, Any]],
+    pair_metrics: list[dict[str, Any]],
+    clause_ids: list[str],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    pair_by_id = {row["pair_id"]: row for row in pair_metrics}
+    baseline_model = fit_clause_main_effects_baseline(family_metrics, clause_ids)
+    test_rows = [
+        row
+        for row in family_metrics
+        if row["target_type"] == "pair" and row["split"] == "test" and row["primary_metric_eligible"] and row["I_act"] is not None
+    ]
+
+    prediction_rows: list[dict[str, Any]] = []
+    for row in test_rows:
+        pair_row = pair_by_id[row["pair_id"]]
+        pred_graph = pair_row["I_pair_discovery"]
+        pred_main = predict_clause_main_effects(row["target_clauses"], baseline_model)
+        prediction_rows.append(
+            {
+                "family_id": row["family_id"],
+                "pair_id": row["pair_id"],
+                "family_slot": row["family_slot"],
+                "target_clauses": row["target_clauses"],
+                "I_act_true": row["I_act"],
+                "pred_graph": pred_graph,
+                "pred_main_effects": pred_main,
+                "graph_prediction_available": pred_graph is not None,
+                "main_effects_prediction_available": pred_main is not None,
+            }
+        )
+
+    comparable = [row for row in prediction_rows if row["graph_prediction_available"] and row["main_effects_prediction_available"]]
+    mse_graph = mean_or_none([(row["I_act_true"] - row["pred_graph"]) ** 2 for row in comparable])
+    mse_main = mean_or_none([(row["I_act_true"] - row["pred_main_effects"]) ** 2 for row in comparable])
+
+    pair_test_means: dict[str, list[float]] = defaultdict(list)
+    for row in test_rows:
+        if row["pair_id"] in pair_by_id and pair_by_id[row["pair_id"]]["I_pair_discovery"] is not None:
+            pair_test_means[row["pair_id"]].append(row["I_act"])
+    comparable_pairs = sorted(pair_test_means)
+    disc_values = [pair_by_id[pair_id]["I_pair_discovery"] for pair_id in comparable_pairs]
+    test_values = [mean(pair_test_means[pair_id]) for pair_id in comparable_pairs]
+    pair_level_spearman = spearman_correlation(disc_values, test_values)
+
+    summary = {
+        "baseline_model": baseline_model,
+        "eligible_test_family_count": len(test_rows),
+        "comparable_test_family_count": len(comparable),
+        "mse_graph": mse_graph,
+        "mse_main_effects": mse_main,
+        "pair_level_spearman_discovery_vs_test": pair_level_spearman,
+        "graph_better_than_main_effects": (mse_graph < mse_main) if mse_graph is not None and mse_main is not None else None,
+        "provisional_readout": provisional_prediction_label(mse_graph, mse_main, pair_level_spearman, len(comparable)),
+    }
+    return summary, prediction_rows
+
+
 def main() -> None:
     args = parse_args()
     output_dir = args.output_dir or (args.run_dir / "metrics")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    loaded = load_run_inputs(args.dataset_root, args.run_dir)
+    if args.action_source == "resolved_actions":
+        args.resolved_actions_jsonl = args.resolved_actions_jsonl or (args.run_dir / "judging" / "deepseek_action_judge" / "resolved_actions.jsonl")
+        require(args.resolved_actions_jsonl.exists(), f"Resolved actions JSONL not found: {args.resolved_actions_jsonl}")
+
+    loaded = load_run_inputs(args.dataset_root, args.run_dir, args.action_source, args.resolved_actions_jsonl)
     joined_rows = loaded["joined_rows"]
     family_metrics = compute_family_metrics(joined_rows)
     pair_metrics = compute_pair_metrics(family_metrics, loaded["pair_by_id"])
     control_metrics = compute_control_metrics(family_metrics, loaded["clause_by_id"])
     node_metrics = compute_node_metrics(pair_metrics, loaded["clause_by_id"])
+    reproducibility_summary = compute_reproducibility_summary(pair_metrics)
+    heldout_prediction_summary, heldout_prediction_rows = compute_heldout_prediction_summary(
+        family_metrics,
+        pair_metrics,
+        clause_ids=sorted(loaded["clause_by_id"]),
+    )
     directional_status = build_directional_join_status(
         args.directional_scores_jsonl,
         valid_prompt_ids={row["prompt_id"] for row in joined_rows},
@@ -556,6 +859,9 @@ def main() -> None:
     write_jsonl(output_dir / "pair_metrics.jsonl", pair_metrics)
     write_jsonl(output_dir / "control_metrics.jsonl", control_metrics)
     write_jsonl(output_dir / "node_metrics.jsonl", node_metrics)
+    write_json(output_dir / "reproducibility_summary.json", reproducibility_summary)
+    write_json(output_dir / "heldout_prediction_summary.json", heldout_prediction_summary)
+    write_jsonl(output_dir / "heldout_prediction_rows.jsonl", heldout_prediction_rows)
     write_json(output_dir / "directional_join_status.json", directional_status)
 
     unscorable_rows = [
@@ -576,8 +882,9 @@ def main() -> None:
     write_csv(output_dir / "unscorable_families.csv", unscorable_rows)
 
     response_parse_status_counts = dict(Counter(row["parse_status"] for row in loaded["joined_rows"] if not row["response_missing"]))
-    effective_parse_status_counts = dict(Counter(row["effective_parse_status"] for row in loaded["joined_rows"]))
-    parsed_action_counts = dict(Counter(row["action_tag"] for row in loaded["joined_rows"] if row["is_parsed"]))
+    effective_parse_status_counts = dict(Counter(row["analysis_parse_status"] for row in loaded["joined_rows"]))
+    parsed_action_counts = dict(Counter(row["analysis_action_tag"] for row in loaded["joined_rows"] if row["is_parsed"]))
+    analysis_action_source_counts = dict(Counter(row["analysis_action_source"] for row in loaded["joined_rows"]))
     family_status_counts = dict(Counter(row["status"] for row in family_metrics))
     zero_eligible_pair_ids = [row["pair_id"] for row in pair_metrics if row["zero_eligible_families"]]
     zero_eligible_control_clause_ids = [row["clause_id"] for row in control_metrics if row["zero_eligible_controls"]]
@@ -585,6 +892,8 @@ def main() -> None:
     run_summary = {
         "metric_mode": METRIC_MODE,
         "metric_mode_note": METRIC_MODE_NOTE,
+        "action_source": args.action_source,
+        "resolved_actions_jsonl": str(args.resolved_actions_jsonl.resolve()) if args.resolved_actions_jsonl is not None else None,
         "run_id": loaded["run_id"],
         "model_id": loaded["model_id"],
         "system_prompt_sha256": loaded["system_prompt_sha256"],
@@ -606,6 +915,7 @@ def main() -> None:
             "response_parse_status_counts": response_parse_status_counts,
             "effective_parse_status_counts": effective_parse_status_counts,
             "parsed_action_counts": parsed_action_counts,
+            "analysis_action_source_counts": analysis_action_source_counts,
             "families_with_parse_coverage_below_one": sorted(
                 [row["family_id"] for row in family_metrics if row["parse_coverage"] is not None and row["parse_coverage"] < 1.0]
             ),
@@ -614,6 +924,8 @@ def main() -> None:
             "zero_eligible_control_clause_ids": zero_eligible_control_clause_ids,
         },
         "later_study_quantities": computability_flags(pair_metrics),
+        "reproducibility_summary": reproducibility_summary,
+        "heldout_prediction_summary": heldout_prediction_summary,
         "directional_join": directional_status,
     }
     write_json(output_dir / "run_metrics_summary.json", run_summary)
@@ -625,6 +937,7 @@ def main() -> None:
                 "run_family_count": len(family_metrics),
                 "run_prompt_count_total": len(joined_rows),
                 "run_prompt_count_parsed": sum(1 for row in joined_rows if row["is_parsed"]),
+                "action_source": args.action_source,
                 "family_status_counts": family_status_counts,
                 "zero_eligible_pair_ids": zero_eligible_pair_ids,
             },
